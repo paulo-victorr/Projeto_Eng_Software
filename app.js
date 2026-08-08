@@ -205,8 +205,12 @@ function statusLote(lote) {
   };
 }
 
+function lotesAtivos() {
+  return state.dados.lotes.filter((lote) => Number(lote.quantidade) > 0);
+}
+
 function lotesFiltrados() {
-  return state.dados.lotes.filter((lote) => {
+  return lotesAtivos().filter((lote) => {
     const status = statusLote(lote).chave;
     const texto = `${lote.nome} ${lote.fabricante} ${lote.lote}`.toLowerCase();
     return (!state.filtros.busca || texto.includes(state.filtros.busca.toLowerCase()))
@@ -224,7 +228,7 @@ function categorias() {
 }
 
 function fornecedores() {
-  return Array.from(new Set(state.dados.lotes.map((lote) => lote.fornecedor))).sort();
+  return Array.from(new Set(lotesAtivos().map((lote) => lote.fornecedor))).sort();
 }
 
 function opcoes(lista, selecionado = "") {
@@ -234,7 +238,7 @@ function opcoes(lista, selecionado = "") {
 }
 
 function metricas() {
-  return state.dados.lotes.reduce((acc, lote) => {
+  return lotesAtivos().reduce((acc, lote) => {
     acc.total += 1;
     acc[statusLote(lote).chave] += 1;
     return acc;
@@ -322,7 +326,7 @@ function renderLogin() {
 
 function renderDashboard() {
   const m = metricas();
-  const criticos = state.dados.lotes
+  const criticos = lotesAtivos()
     .filter((lote) => ["alerta", "vencido", "bloqueado"].includes(statusLote(lote).chave))
     .sort((a, b) => diasEntre(a.validade) - diasEntre(b.validade));
 
@@ -382,7 +386,7 @@ function renderEstoque() {
     : "";
 
   document.querySelector("#app").innerHTML = shell(`
-    ${topbar("Estoque por lote", "Cadastro, consulta e situacao dos produtos armazenados.", acao)}
+    ${topbar("Estoque por lote", "Cadastro, consulta e situacao dos produtos armazenados. Lotes sem saldo são arquivados automaticamente.", acao)}
     ${filtrosEstoque()}
   `);
 }
@@ -565,7 +569,7 @@ function tabelaBaixas(baixas) {
 function renderConfig() {
   const linhas = categorias().map((categoria) => `
     <label>${escapar(categoria)}
-      <input data-margem="${escapar(categoria)}" type="number" min="1" value="${margemCategoria(categoria)}">
+      <input data-margem="${escapar(categoria)}" type="number" min="30" value="${margemCategoria(categoria)}">
     </label>
   `).join("");
 
@@ -795,7 +799,9 @@ function salvarLote(form) {
   }
 
   fecharModal();
-  toast("Lote salvo.");
+  toast(lote.quantidade > 0
+    ? "Lote salvo."
+    : "Lote salvo e arquivado por estar sem saldo.");
   render();
 }
 
@@ -842,7 +848,12 @@ function confirmarBaixa(form) {
   };
   state.dados.baixas.unshift(baixa);
   registrarAuditoria("Baixa de estoque", `${lote.nome} - ${lote.lote}: ${quantidade}`);
-  toast("Baixa registrada.");
+  if (lote.quantidade === 0) {
+    registrarAuditoria("Esgotamento de lote", `${lote.nome} - ${lote.lote} removido do estoque ativo`);
+    toast("Baixa registrada. O lote esgotado foi arquivado automaticamente.");
+  } else {
+    toast("Baixa registrada.");
+  }
   render();
 }
 
@@ -893,6 +904,145 @@ function csvBaixas() {
   exportarCsv("relatorio-baixas.csv", [cabecalho, ...linhas]);
 }
 
+function quebrarTextoPdf(texto, limite = 92) {
+  const palavras = String(texto ?? "").split(/\s+/).filter(Boolean);
+  if (!palavras.length) return [""];
+
+  return palavras.reduce((linhas, palavra) => {
+    const ultima = linhas.at(-1);
+    if (!ultima || `${ultima} ${palavra}`.length > limite) {
+      linhas.push(palavra);
+    } else {
+      linhas[linhas.length - 1] = `${ultima} ${palavra}`;
+    }
+    return linhas;
+  }, []);
+}
+
+function escaparTextoPdf(texto) {
+  return String(texto ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E]/g, " ")
+    .replaceAll("\\", "\\\\")
+    .replaceAll("(", "\\(")
+    .replaceAll(")", "\\)");
+}
+
+function itensRelatorioPdf() {
+  const itens = [
+    { texto: "RELATORIO GERENCIAL DE ESTOQUE", tamanho: 16, negrito: true },
+    { texto: `Gerado em ${new Date().toLocaleString("pt-BR")}`, tamanho: 9 },
+    {
+      texto: `Filtros: categoria ${state.filtros.categoria || "todas"}; fornecedor ${state.filtros.fornecedor || "todos"}; status ${state.filtros.status || "todos"}; busca ${state.filtros.busca || "sem busca"}.`,
+      tamanho: 9
+    },
+    { texto: "ESTOQUE ATUAL", tamanho: 13, negrito: true, espacoAntes: 12 }
+  ];
+
+  const lotes = lotesFiltrados();
+  if (!lotes.length) {
+    itens.push({ texto: "Nenhum lote ativo encontrado para os filtros informados.", tamanho: 10 });
+  }
+
+  lotes.forEach((lote) => {
+    const status = statusLote(lote).rotulo;
+    itens.push(
+      { texto: `${lote.nome} - lote ${lote.lote}`, tamanho: 11, negrito: true, espacoAntes: 7 },
+      { texto: `Fabricante: ${lote.fabricante} | Categoria: ${lote.categoria} | Fornecedor: ${lote.fornecedor}`, tamanho: 9 },
+      { texto: `Saldo: ${lote.quantidade} ${lote.unidade} | Validade: ${formatarData(lote.validade)} | Status: ${status}`, tamanho: 9 }
+    );
+  });
+
+  itens.push({ texto: "HISTORICO DE BAIXAS", tamanho: 13, negrito: true, espacoAntes: 15 });
+  const baixas = baixasFiltradas();
+  if (!baixas.length) {
+    itens.push({ texto: "Nenhuma baixa encontrada para os filtros informados.", tamanho: 10 });
+  }
+
+  baixas.forEach((baixa) => {
+    const lote = state.dados.lotes.find((item) => item.id === baixa.loteId);
+    itens.push(
+      { texto: `${new Date(baixa.dataHora).toLocaleString("pt-BR")} - ${lote?.nome || "Lote removido"} (${lote?.lote || "-"})`, tamanho: 10, negrito: true, espacoAntes: 7 },
+      { texto: `Quantidade: ${baixa.quantidade} | Movimento: ${baixa.categoriaMovimento} | Responsavel: ${baixa.usuario}`, tamanho: 9 },
+      { texto: `Destino: ${baixa.destino} | Justificativa: ${baixa.justificativa}`, tamanho: 9 }
+    );
+  });
+
+  return itens;
+}
+
+function paginarItensPdf(itens) {
+  const paginas = [[]];
+  let y = 795;
+
+  itens.forEach((item) => {
+    y -= item.espacoAntes || 0;
+    const limite = item.tamanho >= 13 ? 62 : 96;
+    quebrarTextoPdf(item.texto, limite).forEach((linha) => {
+      const altura = item.tamanho + 4;
+      if (y - altura < 50) {
+        paginas.push([]);
+        y = 795;
+      }
+      paginas.at(-1).push({ ...item, texto: linha, y });
+      y -= altura;
+    });
+  });
+
+  return paginas;
+}
+
+function gerarPdfRelatorio() {
+  const paginas = paginarItensPdf(itensRelatorioPdf());
+  const objetos = [null, "<< /Type /Catalog /Pages 2 0 R >>", "", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"];
+  const paginasIds = [];
+
+  paginas.forEach((itens, indice) => {
+    const paginaId = 5 + (indice * 2);
+    const conteudoId = paginaId + 1;
+    paginasIds.push(`${paginaId} 0 R`);
+
+    const comandos = itens.map((item) => (
+      `BT /${item.negrito ? "F2" : "F1"} ${item.tamanho} Tf 45 ${item.y} Td (${escaparTextoPdf(item.texto)}) Tj ET`
+    ));
+    comandos.push(`BT /F1 8 Tf 270 25 Td (Pagina ${indice + 1} de ${paginas.length}) Tj ET`);
+    const fluxo = comandos.join("\n");
+
+    objetos[paginaId] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${conteudoId} 0 R >>`;
+    objetos[conteudoId] = `<< /Length ${new TextEncoder().encode(fluxo).length} >>\nstream\n${fluxo}\nendstream`;
+  });
+
+  objetos[2] = `<< /Type /Pages /Kids [${paginasIds.join(" ")}] /Count ${paginas.length} >>`;
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  const encoder = new TextEncoder();
+
+  for (let indice = 1; indice < objetos.length; indice += 1) {
+    offsets[indice] = encoder.encode(pdf).length;
+    pdf += `${indice} 0 obj\n${objetos[indice]}\nendobj\n`;
+  }
+
+  const inicioXref = encoder.encode(pdf).length;
+  pdf += `xref\n0 ${objetos.length}\n0000000000 65535 f \n`;
+  for (let indice = 1; indice < objetos.length; indice += 1) {
+    pdf += `${String(offsets[indice]).padStart(10, "0")} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objetos.length} /Root 1 0 R >>\nstartxref\n${inicioXref}\n%%EOF`;
+
+  return new Blob([pdf], { type: "application/pdf" });
+}
+
+function baixarPdfRelatorio() {
+  const url = URL.createObjectURL(gerarPdfRelatorio());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "relatorio-gerencial.pdf";
+  link.click();
+  URL.revokeObjectURL(url);
+  toast("PDF gerado com sucesso.");
+}
+
 function vincularEventos() {
   document.querySelectorAll("[data-nav]").forEach((botao) => {
     botao.addEventListener("click", () => {
@@ -938,7 +1088,17 @@ function vincularEventos() {
   document.querySelector("#configForm")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = event.currentTarget;
-    form.querySelectorAll("[data-margem]").forEach((input) => {
+    const margens = Array.from(form.querySelectorAll("[data-margem]"));
+    const margemInvalida = margens.find((input) => (
+      !Number.isFinite(Number(input.value)) || Number(input.value) < 30
+    ));
+    if (margemInvalida) {
+      toast("A margem minima de alerta e 30 dias.");
+      margemInvalida.focus();
+      return;
+    }
+
+    margens.forEach((input) => {
       state.dados.configuracoes.margens[input.dataset.margem] = Number(input.value);
     });
     state.dados.configuracoes.emails = form.emails.value.trim();
@@ -966,7 +1126,7 @@ function vincularEventos() {
 
   document.querySelector("#exportarEstoque")?.addEventListener("click", csvEstoque);
   document.querySelector("#exportarBaixas")?.addEventListener("click", csvBaixas);
-  document.querySelector("#imprimir")?.addEventListener("click", () => window.print());
+  document.querySelector("#imprimir")?.addEventListener("click", baixarPdfRelatorio);
 }
 
 function vincularAcoesLotes() {
