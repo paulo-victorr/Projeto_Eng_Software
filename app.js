@@ -336,6 +336,7 @@ function renderDashboard() {
     </section>
     <section class="panel" style="margin-top:16px">
       <h2>Lotes que exigem atencao</h2>
+      <p class="panel-description">Esta lista exibe apenas lotes em alerta, vencidos ou bloqueados. Lotes liberados e dentro da validade continuam no estoque e são contabilizados no indicador acima.</p>
       ${tabelaLotes(criticos)}
     </section>
   `;
@@ -370,7 +371,7 @@ function filtrosEstoque() {
           </select>
         </label>
       </div>
-      ${tabelaLotes(lotesFiltrados())}
+      <div id="resultadoLotes">${tabelaLotes(lotesFiltrados())}</div>
     </section>
   `;
 }
@@ -503,11 +504,11 @@ function renderRelatorios() {
     </section>
     <section class="panel" style="margin-top:16px">
       <h2>Estoque atual</h2>
-      ${tabelaLotes(lotesFiltrados())}
+      <div id="resultadoEstoque">${tabelaLotes(lotesFiltrados())}</div>
     </section>
     <section class="panel" style="margin-top:16px">
       <h2>Historico de baixas</h2>
-      ${tabelaBaixas(baixas)}
+      <div id="resultadoBaixas">${tabelaBaixas(baixas)}</div>
     </section>
   `);
 }
@@ -651,6 +652,7 @@ function modalLote(lote = null) {
       </section>
     </div>
   `);
+  vincularEventosModal();
 }
 
 function abrirRecall(loteId) {
@@ -685,6 +687,58 @@ function abrirRecall(loteId) {
       </section>
     </div>
   `);
+  vincularEventosModal();
+}
+
+function fecharModal() {
+  const modal = document.querySelector("#modal");
+  if (!modal) return;
+  modal.dispatchEvent(new Event("modal:fechar"));
+  modal.remove();
+}
+
+function vincularEventosModal() {
+  const modal = document.querySelector("#modal");
+  if (!modal) return;
+
+  modal.querySelector("#fecharModal")?.addEventListener("click", fecharModal);
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) fecharModal();
+  });
+
+  modal.querySelector("#loteForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    salvarLote(event.currentTarget);
+  });
+
+  modal.querySelector("#recallForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const loteId = form.querySelector('[name="id"]').value;
+    const lote = state.dados.lotes.find((item) => item.id === loteId);
+    if (!lote) {
+      toast("Lote nao encontrado.");
+      fecharModal();
+      return;
+    }
+
+    lote.bloqueado = true;
+    lote.motivoBloqueio = form.motivo.value.trim();
+    registrarAuditoria("Bloqueio sanitario", `${lote.nome} - ${lote.lote}: ${lote.motivoBloqueio}`);
+    fecharModal();
+    toast("Lote bloqueado imediatamente.");
+    render();
+  });
+
+  const fecharComEsc = (event) => {
+    if (event.key === "Escape" && document.querySelector("#modal") === modal) {
+      fecharModal();
+    }
+  };
+  document.addEventListener("keydown", fecharComEsc);
+  modal.addEventListener("modal:fechar", () => {
+    document.removeEventListener("keydown", fecharComEsc);
+  }, { once: true });
 }
 
 function toast(mensagem) {
@@ -709,8 +763,10 @@ function salvarLote(form) {
     return;
   }
 
+  const loteId = form.querySelector('[name="id"]').value;
+  const loteExistente = state.dados.lotes.find((item) => item.id === loteId);
   const lote = {
-    id: form.id.value || uid("lote"),
+    id: loteId || uid("lote"),
     nome: form.nome.value.trim(),
     fabricante: form.fabricante.value.trim(),
     categoria: form.categoria.value.trim(),
@@ -721,8 +777,8 @@ function salvarLote(form) {
     validade: form.validade.value,
     fornecedor: form.fornecedor.value.trim(),
     entrada: form.entrada.value,
-    bloqueado: state.dados.lotes.find((item) => item.id === form.id.value)?.bloqueado || false,
-    motivoBloqueio: state.dados.lotes.find((item) => item.id === form.id.value)?.motivoBloqueio || ""
+    bloqueado: loteExistente?.bloqueado || false,
+    motivoBloqueio: loteExistente?.motivoBloqueio || ""
   };
 
   if (!state.dados.configuracoes.margens[lote.categoria]) {
@@ -738,7 +794,7 @@ function salvarLote(form) {
     registrarAuditoria("Cadastro de lote", `${lote.nome} - ${lote.lote}`);
   }
 
-  document.querySelector("#modal")?.remove();
+  fecharModal();
   toast("Lote salvo.");
   render();
 }
@@ -848,7 +904,7 @@ function vincularEventos() {
   document.querySelector("#sair")?.addEventListener("click", () => {
     sessionStorage.removeItem(SESSION_KEY);
     state.usuario = null;
-    renderLogin();
+    render();
   });
 
   document.querySelector("#loginForm")?.addEventListener("submit", async (event) => {
@@ -872,37 +928,7 @@ function vincularEventos() {
   });
 
   document.querySelector("#novoLote")?.addEventListener("click", () => modalLote());
-  document.querySelector("#fecharModal")?.addEventListener("click", () => {
-    document.querySelector("#modal")?.remove();
-  });
-
-  document.querySelectorAll("[data-editar]").forEach((botao) => {
-    botao.addEventListener("click", () => {
-      const lote = state.dados.lotes.find((item) => item.id === botao.dataset.editar);
-      modalLote(lote);
-    });
-  });
-
-  document.querySelectorAll("[data-recall]").forEach((botao) => {
-    botao.addEventListener("click", () => abrirRecall(botao.dataset.recall));
-  });
-
-  document.querySelector("#loteForm")?.addEventListener("submit", (event) => {
-    event.preventDefault();
-    salvarLote(event.currentTarget);
-  });
-
-  document.querySelector("#recallForm")?.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const lote = state.dados.lotes.find((item) => item.id === form.id.value);
-    lote.bloqueado = true;
-    lote.motivoBloqueio = form.motivo.value.trim();
-    registrarAuditoria("Bloqueio sanitario", `${lote.nome} - ${lote.lote}: ${lote.motivoBloqueio}`);
-    document.querySelector("#modal")?.remove();
-    toast("Lote bloqueado imediatamente.");
-    render();
-  });
+  vincularAcoesLotes();
 
   document.querySelector("#baixaForm")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -934,13 +960,45 @@ function vincularEventos() {
           periodoFim: "periodoFim"
         };
         state.filtros[mapa[id]] = event.target.value;
-        render();
+        atualizarResultadosFiltrados();
       });
     });
 
   document.querySelector("#exportarEstoque")?.addEventListener("click", csvEstoque);
   document.querySelector("#exportarBaixas")?.addEventListener("click", csvBaixas);
   document.querySelector("#imprimir")?.addEventListener("click", () => window.print());
+}
+
+function vincularAcoesLotes() {
+  document.querySelectorAll("[data-editar]").forEach((botao) => {
+    botao.addEventListener("click", () => {
+      const lote = state.dados.lotes.find((item) => item.id === botao.dataset.editar);
+      if (lote) modalLote(lote);
+    });
+  });
+
+  document.querySelectorAll("[data-recall]").forEach((botao) => {
+    botao.addEventListener("click", () => abrirRecall(botao.dataset.recall));
+  });
+}
+
+function atualizarResultadosFiltrados() {
+  const resultadoLotes = document.querySelector("#resultadoLotes");
+  if (resultadoLotes) {
+    resultadoLotes.innerHTML = tabelaLotes(lotesFiltrados());
+    vincularAcoesLotes();
+  }
+
+  const resultadoEstoque = document.querySelector("#resultadoEstoque");
+  if (resultadoEstoque) {
+    resultadoEstoque.innerHTML = tabelaLotes(lotesFiltrados());
+    vincularAcoesLotes();
+  }
+
+  const resultadoBaixas = document.querySelector("#resultadoBaixas");
+  if (resultadoBaixas) {
+    resultadoBaixas.innerHTML = tabelaBaixas(baixasFiltradas());
+  }
 }
 
 function render() {
