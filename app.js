@@ -164,6 +164,10 @@ function podeAdministrar() {
   return state.usuario?.perfil === "admin";
 }
 
+function podeAcessarTela(tela) {
+  return !["relatorios", "config"].includes(tela) || podeAdministrar();
+}
+
 function margemCategoria(categoria) {
   return Number(state.dados.configuracoes.margens[categoria] ?? 30);
 }
@@ -255,7 +259,7 @@ function shell(conteudo) {
   ];
 
   const itensNav = nav
-    .filter(([tela]) => tela !== "config" || podeAdministrar())
+    .filter(([tela]) => podeAcessarTela(tela))
     .map(([tela, nome]) => (
       `<button class="${state.tela === tela ? "active" : ""}" data-nav="${tela}">${nome}</button>`
     )).join("");
@@ -809,6 +813,7 @@ function confirmarBaixa(form) {
   const lote = state.dados.lotes.find((item) => item.id === form.loteId.value);
   const quantidade = Number(form.quantidade.value);
   const diasTratamento = Number(form.diasTratamento.value || 0);
+  const entregaPaciente = form.categoriaMovimento.value === "Entrega a Paciente";
 
   if (!lote) {
     toast("Selecione um lote.");
@@ -825,12 +830,14 @@ function confirmarBaixa(form) {
     return;
   }
 
-  if (
-    lote.categoria === "Medicamento de uso continuo"
-    && form.categoriaMovimento.value === "Entrega a Paciente"
-    && diasEntre(lote.validade) < diasTratamento
-  ) {
-    toast("Baixa bloqueada: validade inferior a duracao total do tratamento.");
+  if (entregaPaciente && diasTratamento <= 0) {
+    toast("Informe um periodo de tratamento maior que zero para entrega a paciente.");
+    return;
+  }
+
+  const diasRestantes = diasEntre(lote.validade);
+  if (entregaPaciente && diasRestantes < diasTratamento) {
+    toast(`Baixa bloqueada: restam ${diasRestantes} dias de validade, menos que os ${diasTratamento} dias de tratamento.`);
     return;
   }
 
@@ -1166,6 +1173,10 @@ function render() {
     renderLogin();
     vincularEventos();
     return;
+  }
+
+  if (!podeAcessarTela(state.tela)) {
+    state.tela = "dashboard";
   }
 
   if (state.tela === "dashboard") renderDashboard();

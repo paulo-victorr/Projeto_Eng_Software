@@ -20,9 +20,9 @@ Abra o arquivo `index.html` no navegador.
 - Configuracao de margem de alerta por categoria.
 - Registro de baixa com auditoria de usuario, data, destino e justificativa.
 - Bloqueio sanitario de lote com impedimento de baixa.
-- Validacao de tratamento continuo no momento da entrega.
-- Relatorios de estoque e baixas com filtros.
-- Exportacao CSV e geracao de PDF pela impressao do navegador.
+- Validacao da validade durante todo o periodo de tratamento na entrega a paciente.
+- Relatorios de estoque e baixas com filtros, restritos ao administrador.
+- Exportacao CSV e geracao de arquivo PDF.
 
 Os dados ficam salvos no `localStorage` do navegador, adequado para prototipo
 academico sem servidor.
